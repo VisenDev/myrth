@@ -1,69 +1,9 @@
 
-/*
-#define TOK_PLUS 0
-#define TOK_MINUS 1
-#define TOK_TIMES 2
-#define TOK_DIVIDE 3
-#define TOK_DUP 4
-#define TOK_COLON 5
-#define TOK_SEMICOLON 6
-#define TOK_PERIOD 7
-#define TOK_JMP 8
-#define TOK_JMP_NE 9
-#define TOK_NAND 10
-#define TOK_EMIT 11
-*/
 
-#include <string.h>
-#include <limits.h>
-#include <stdlib.h>
-#include <assert.h>
-#include <stdio.h>
-
-
-/*Int Vec*/
-typedef struct {
-    int * items;
-    int len;
-    int cap;
-} IntVec;
-
-void intvec_push(IntVec* self, int value) {
-    if(self->cap <= 0) {
-        const int initial_cap = 16;
-        self->items = malloc(sizeof(int) * initial_cap); 
-        assert(self->items);
-        self->cap = initial_cap;
-    }
-    if(self->len >= self->cap) {
-        self->items = realloc(self->items, sizeof(int) * self->cap * 2);
-        assert(self->items);
-        self->cap *= 2;
-    }
-    self->items[self->len] = value;
-    self->len += 1;
-}
-
-void intvec_push_array(IntVec* self, int * values, int count) {
-    int i = 0;
-    for(i = count - 1; i >= 0; --i) {
-        intvec_push(self, values[i]);
-    }
-}
-
-int intvec_pop(IntVec * self) {
-    if(self->len <= 0) {
-        assert(0 && "stack underflow");
-    }
-    self->len -= 1;
-    return self->items[self->len];
-}
-
-
-
+#if 0
 /*Tokenizer Implementation*/
 typedef struct Tokenizer {
-    IntVec out;
+    intvec out;
 
     char ** strs;
     int strs_len;
@@ -120,7 +60,7 @@ void tokenize(Tokenizer * self, const char * const str) {
     self->strs[self->strs_len] = strdup(str);
     self->strs_len += 1;
     {
-        IntVec tmp = {0};
+        intvec tmp = {0};
         char * tok = strtok(self->strs[self->strs_len - 1], " \n");
         intvec_push(&tmp, -1);
 
@@ -172,26 +112,124 @@ void tokenize_file(Tokenizer * self, char * filename) {
     }
     return tokenize(self, buffer);
 }
+#endif
 
 
-#define word_max_tokens
+#include <string.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <stdio.h>
+
+
+/*Vec*/
+#define ImplementVec(T) \
+typedef struct { \
+    T * items; \
+    unsigned int len; \
+    unsigned int cap; \
+} T##Vec; \
+ \
+void T##Vec_push(T##Vec* self, T value); \
+void T##Vec_push(T##Vec* self, T value) { \
+    if(self->cap <= 0) { \
+        const int initial_cap = 16; \
+        self->items = malloc(sizeof(T) * initial_cap);  \
+        assert(self->items); \
+        self->cap = initial_cap; \
+    } \
+    if(self->len >= self->cap) { \
+        self->items = realloc(self->items, sizeof(T) * self->cap * 2); \
+        assert(self->items); \
+        self->cap *= 2; \
+    } \
+    self->items[self->len] = value; \
+    self->len += 1; \
+} \
+ \
+T T##Vec_pop(T##Vec* self); \
+T T##Vec_pop(T##Vec* self) { \
+    if(self->len <= 0) { \
+        assert(0 && "stack underflow"); \
+    } \
+    self->len -= 1; \
+    return self->items[self->len]; \
+} \
+
 
 struct Forth;
+typedef void (*SpecialFormFn) (struct Forth *);
 
+typedef struct {
+    int lookup_index;
+} TokenizedString;
+
+typedef struct {
+    char * str;
+} String;
+
+typedef struct {
+    enum {
+        TAG_INTEGER,
+        TAG_REAL,
+        TAG_STRING,
+        TAG_SYMBOL
+    } tag;
+    union {
+        int integer;
+        float real;
+        TokenizedString string;
+        TokenizedString symbol;
+    } value;
+} Token;
+
+typedef struct {
+    enum {
+        TAG_PUSH_TOKEN,
+        TAG_SPECIAL_FORM,
+        TAG_FN_CALL,
+        TAG_EOF
+    } tag;
+    union {
+        Token push_token;
+        SpecialFormFn fn;
+        int fn_call;
+    } value;
+} Opcode;
+
+typedef int Int;
+ImplementVec(Int)
+ImplementVec(Token)
+ImplementVec(Opcode)
+ImplementVec(String)
+
+typedef struct Forth {
+    StringVec memory_buffers;
+    StringVec strings;
+    TokenVec stack;
+    int instruction_ptr;
+    IntVec return_stack;
+    OpcodeVec instructions;
+} Forth;
+
+#if 0
+
+struct Forth;
 typedef void (*WordFn) (struct Forth *);
 
+/*
 typedef struct {
     char * name;
     int tok;
     WordFn fn;
     int tokens[word_max_tokens];
-} Word;
+} Word;*/
 
 typedef struct {
     int dense_len;
     int dense_cap;
     Word * dense;
-    IntVec sparse;
+    intvec sparse;
 } WordSet;
 
 void wordset_put(WordSet * self, Word word) {
@@ -245,7 +283,7 @@ Word * wordset_get(WordSet * self, int tok) {
 typedef struct Forth {
     Tokenizer tokenizer;
     WordSet words;
-    IntVec stk;
+    intvec stk;
     int compile_mode;
     int exit;
 } Forth;
@@ -466,3 +504,4 @@ int main(int argc, char ** argv) {
     }
     return 0;
 }
+#endif
