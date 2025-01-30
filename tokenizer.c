@@ -74,6 +74,7 @@ typedef struct Tokenizer {
     int cap;
 } Tokenizer;
 
+
 int tokenizer_id(Tokenizer * t, char * tok) {
     int i = 0;
     if(tok == NULL) {
@@ -100,6 +101,7 @@ int tokenizer_id(Tokenizer * t, char * tok) {
 }
 
 void tokenize(Tokenizer * self, const char * const str) {
+/*    printf("Tokenizing:%s", str);*/
     if(self->strs_cap <= 0) {
         const int initial_cap = 16;
         self->strs = malloc(sizeof(char *) * initial_cap);
@@ -120,15 +122,18 @@ void tokenize(Tokenizer * self, const char * const str) {
     {
         IntVec tmp = {0};
         char * tok = strtok(self->strs[self->strs_len - 1], " \n");
+        intvec_push(&tmp, -1);
 
         while(tok != NULL) {
-            intvec_push(&tmp, tokenizer_id(self, tok));
+            const int id = tokenizer_id(self, tok);
+            /*printf("%s:%d\n", tok, id);*/
+            intvec_push(&tmp, id);
             tok = strtok(NULL, " \n");
         }
 
         {
             int tok = intvec_pop(&tmp);
-            while(tmp.len > 0) {
+            while(tok != -1) {
                 intvec_push(&self->out, tok);
                 tok = intvec_pop(&tmp);
             }
@@ -193,7 +198,7 @@ void wordset_put(WordSet * self, Word word) {
     const int tok = word.tok;
     assert(tok >= 0);
 
-    while(tok >= self->sparse.len) {
+    while(tok * 2 + 1 > self->sparse.len) {
         intvec_push(&self->sparse, -1);
     }
     {
@@ -221,6 +226,7 @@ void wordset_put(WordSet * self, Word word) {
 }
 
 Word * wordset_get(WordSet * self, int tok) {
+    /*printf("Looking up tok:%d\n", tok); */
     if(tok < 0 || tok > self->sparse.len) {
         return NULL;
     } else {
@@ -228,6 +234,7 @@ Word * wordset_get(WordSet * self, int tok) {
         if(index == -1) {
             return NULL;
         } else {
+            /*printf("Word found:%s\b", self->dense[index].name);*/
             return &self->dense[index];
         }
 
@@ -240,14 +247,21 @@ typedef struct Forth {
     WordSet words;
     IntVec stk;
     int compile_mode;
+    int exit;
 } Forth;
 
 
 int get_token(Forth * f) {
+    if(f->tokenizer.out.len <= 0) {
+        return -1;
+    }
     return intvec_pop(&f->tokenizer.out);
 }
 
 char * token_value(Forth * f, int token) {
+    if(token < 0) {
+        return "<invalid_token>";
+    }
     return f->tokenizer.tokens[token]; 
 }
 
@@ -298,6 +312,15 @@ void builtin_print_stack(Forth * f) {
     }
     printf("\n");
 }
+void builtin_debug_tokens(Forth * f) {
+    int i = 0;
+    for(i = 0; i < f->tokenizer.len; ++i) {
+        printf("%d:\"%s\"\n", i, f->tokenizer.tokens[i]);
+    }
+}
+void builtin_exit(Forth * f) {
+    f->exit = 1;
+}
 
 Forth forth_init() {
     Forth f = {0};
@@ -308,7 +331,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_plus;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -316,7 +338,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_minus;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -324,7 +345,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_times;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -332,7 +352,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_divide;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -340,7 +359,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_dup;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -348,7 +366,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_period;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -356,7 +373,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_emit;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -364,7 +380,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_enter_compile_mode;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -372,7 +387,6 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_exit_compile_mode;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
     }
     {
         Word w = {0};
@@ -380,7 +394,20 @@ Forth forth_init() {
         w.tok = token_id(&f, w.name);
         w.fn = builtin_print_stack;
         wordset_put(&f.words, w);
-        assert(wordset_get(&f.words, w.tok) != NULL);
+    }
+    {
+        Word w = {0};
+        w.name = "debug_tokens";
+        w.tok = token_id(&f, w.name);
+        w.fn = builtin_debug_tokens;
+        wordset_put(&f.words, w);
+    }
+    {
+        Word w = {0};
+        w.name = "exit";
+        w.tok = token_id(&f, w.name);
+        w.fn = builtin_exit;
+        wordset_put(&f.words, w);
     }
 
     return f;
@@ -389,19 +416,20 @@ Forth forth_init() {
 #define streql(a, b) (strncmp(a, b, 128) == 0)
 
 void forth_run(Forth * f) {
-    const int tok_compile = token_id(f, ":");
-    const int tok_stop_compile = token_id(f, ";");
 
     int tok = get_token(f); 
-    while(tok != -1) {
-        printf("processing token id %d:%s\n", tok, token_value(f, tok));
-        fflush(stdout);
+    /*printf("processing token id %d:%s\n", tok, token_value(f, tok));*/
+    while(tok >= 0) {
+        if(f->exit) return;
         if(f->compile_mode == 0) {
             Word * w = wordset_get(&f->words, tok);
-            if(w) {
+            if(w != NULL) {
+                /*printf("Running word:%s from tok:%d\n", w->name, tok);*/
+                fflush(stdout);
                 assert(streql(w->name, token_value(f, tok)));
                 if(w->fn) {
                     w->fn(f);
+                    if(f->exit) return;
                 } else {
                     /*todo custom compiled words*/
                     fprintf(stderr, "word has no definition (yet)\n");
@@ -417,6 +445,8 @@ void forth_run(Forth * f) {
         } else {
             fprintf(stderr, "Compile Mode not implemented yet\n");
         }
+        printf("    Stack: ");
+        builtin_print_stack(f);
         tok = get_token(f);
     }
 
@@ -425,8 +455,14 @@ void forth_run(Forth * f) {
 
 int main(int argc, char ** argv) {
     Forth f = forth_init();
-    assert(argc >= 1);
-    tokenize_file(&f.tokenizer, argv[1]);
-    forth_run(&f);
+    char * line = NULL;
+    size_t len = 0;
+    /*assert(argc >= 1);
+    tokenize_file(&f.tokenizer, argv[1]);*/
+    while(f.exit == 0) {
+        getline(&line, &len, stdin);
+        tokenize(&f.tokenizer, line);
+        forth_run(&f);
+    }
     return 0;
 }
