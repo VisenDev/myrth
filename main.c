@@ -162,7 +162,7 @@ typedef void (*SpecialFormFn) (struct Forth *);
 
 typedef struct {
     int lookup_index;
-} TokenizedString;
+} StringId;
 
 typedef struct {
     char * str;
@@ -172,14 +172,12 @@ typedef struct {
     enum {
         TAG_INTEGER,
         TAG_REAL,
-        TAG_STRING,
         TAG_SYMBOL
     } tag;
     union {
         int integer;
         float real;
-        TokenizedString string;
-        TokenizedString symbol;
+        StringId symbol;
     } value;
 } Token;
 
@@ -211,6 +209,98 @@ typedef struct Forth {
     IntVec return_stack;
     OpcodeVec instructions;
 } Forth;
+
+
+int is_integer(char * tok) {
+    while(*tok != 0) {
+        if(*tok < '0' || *tok > '9') return 0;
+        ++tok;
+    }
+    return 1;
+}
+
+int is_real(char * tok) {
+    int decimal_found = 0;
+    while(*tok != 0) {
+        if(*tok < '0' || *tok > '9') return 0;
+        if(*tok == '.') {
+            if(decimal_found) {
+                return 0;
+            } else {
+                decimal_found = 1;
+            }
+        }
+        ++tok;
+    }
+    return 1;
+}
+
+StringId forth_string_id(Forth * f, char * str) {
+    StringId result = {0};
+    int i = 0;
+    for(i = 0; i < f->strings.len; ++i) {
+        if(strcmp(f->strings.items[i].str, str) == 0) {
+            result.lookup_index = i;
+            return result;
+        }
+    }
+    {
+        String string = {0};
+        string.str = str;
+        StringVec_push(&f->strings, string);
+        result.lookup_index = f->strings.len - 1;
+        return result;
+    }
+}
+
+void forth_top_level(Forth * f, TokenVec * toks, int * i) {
+}
+
+void forth_eval(Forth * f, const char * const input, unsigned long len) {
+    char * buf = strndup(input, len + 1);
+    TokenVec tokens = {0};
+    int i = 0;
+    char * tok = strtok(buf, " \n");
+    {
+        String str = {0};
+        str.str = buf;
+        StringVec_push(&f->memory_buffers, str);
+    }
+
+    /*tokenize input*/
+    while(tok != NULL) {
+        Token token = {0};
+        if(is_integer(tok)) {
+            token.tag = TAG_INTEGER;
+            token.value.integer = atoi(tok);
+            TokenVec_push(&tokens, token);
+        } else if(is_real(tok)) {
+            token.tag = TAG_REAL;
+            token.value.real = atof(tok);
+            TokenVec_push(&tokens, token);
+        } else {
+            token.tag = TAG_SYMBOL;
+            token.value.symbol = forth_string_id(f, tok);
+            TokenVec_push(&tokens, token);
+        }
+        
+        tok = strtok(NULL, " \n");
+    }
+
+    /*parse tokens into opcodes*/
+    {
+        int current_token = 0;
+        forth_top_level(f, &tokens, &current_token);
+    }
+    /*
+    for(i = 0; i < tokens.len; ++i) {
+        const Token token = tokens.items[i];
+        if(token.tag == TAG_INTEGER) {
+
+        }
+    }*/
+
+}
 
 #if 0
 
