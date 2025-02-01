@@ -95,6 +95,7 @@ typedef struct Forth {
     TokenVec stack;
     int instruction_ptr;
     IntVec return_stack;
+    IntVec labels;
     OpcodeVec opcodes;
 
     /*special_forms names*/
@@ -104,8 +105,13 @@ typedef struct Forth {
     StringId special_form_divide;
     StringId special_form_dup;
     StringId special_form_emit;
+    StringId special_form_period;
     StringId special_form_compile;
     StringId special_form_stop_compile;
+    StringId special_form_if;
+    StringId special_form_then;
+    StringId special_form_label;
+    StringId special_form_jump_equal;
 } Forth;
 
 
@@ -158,6 +164,10 @@ StringId forth_string_id(Forth * f, char * str) {
     }
 }
 
+char * forth_get_string(Forth * f, StringId string) {
+    return f->strings.items[string.i].str;
+}
+
 void forth_report_error(Forth * f, char * msg) {
     (void) f;
     printf("Error: %s\n", msg);
@@ -204,27 +214,56 @@ void special_form_dup(Forth * f) {
     TokenVec_push(&f->stack, top);
 }
 
+void special_form_emit(Forth * f) {
+    Token top = TokenVec_pop(&f->stack);
+    if(top.tag != TAG_INTEGER) {
+        forth_report_error(f, "Expected integer at stack top inside \'emit\'");
+    }
+    printf("%c", (char)top.value.integer);
+}
+
+void special_form_period(Forth * f) {
+    Token top = TokenVec_pop(&f->stack);
+    if(top.tag == TAG_INTEGER) {
+        printf("%d\n", top.value.integer);
+    } else if(top.tag == TAG_REAL) {
+        printf("%f\n", top.value.real);
+    } else {
+        assert(top.tag == TAG_SYMBOL);
+        printf("%s\n", forth_get_string(f, top.value.symbol));
+    }
+}
+
 
 /*ensure the special form names are set*/
 void forth_ensure_valid_special_forms(Forth * f) {
-    #define special_form_id_set(fieldname, stringname) \
-        if(f->fieldname.i == NULL_STRING_ID) { \
-            f->fieldname = forth_string_id(f, stringname); \
-        }
+    if(f->special_form_dup.i == NULL_STRING_ID)
+        f->special_form_dup = forth_string_id(f, "dup");
 
-    special_form_id_set(special_form_dup, "dup");
-    special_form_id_set(special_form_plus, "+");
-    special_form_id_set(special_form_minus, "-");
-    special_form_id_set(special_form_divide, "/");
-    special_form_id_set(special_form_times, "*");
-    special_form_id_set(special_form_emit, "emit");
+    if(f->special_form_plus.i == NULL_STRING_ID)
+        f->special_form_plus = forth_string_id(f, "+");
 
-    #undef special_form_id_set
+    if(f->special_form_minus.i == NULL_STRING_ID)
+        f->special_form_minus= forth_string_id(f, "-");
+
+    if(f->special_form_times.i == NULL_STRING_ID)
+        f->special_form_times = forth_string_id(f, "*");
+
+    if(f->special_form_divide.i == NULL_STRING_ID)
+        f->special_form_divide = forth_string_id(f, "/");
+
+    if(f->special_form_emit.i == NULL_STRING_ID)
+        f->special_form_emit = forth_string_id(f, "emit");
+
+    if(f->special_form_period.i == NULL_STRING_ID)
+        f->special_form_period= forth_string_id(f, ".");
 }
 
 void forth_top_level(Forth * f, TokenVec * toks, int * i) {
     Token tok = toks->items[*i];
     Opcode opcode = {0};
+
+    *i += 1;
 
     forth_ensure_valid_special_forms(f);
 
@@ -233,24 +272,50 @@ void forth_top_level(Forth * f, TokenVec * toks, int * i) {
         opcode.value.push_token = tok;
         OpcodeVec_push(&f->opcodes, opcode);
     } else if (tok.tag == TAG_SYMBOL) {
-        #define if_special_form(fieldname) \
-            if(tok.value.symbol.i == f->fieldname.i) { \
-                opcode.tag = TAG_SPECIAL_FORM; \
-                opcode.value.special_form = fieldname; \
-                OpcodeVec_push(&f->opcodes, opcode); \
-            }
+        opcode.tag = TAG_SPECIAL_FORM;
 
-        if_special_form(special_form_dup)
-        else if_special_form(special_form_plus)
-        else if_special_form(special_form_minus)
-        else if_special_form(special_form_times)
-        else if_special_form(special_form_divide)
+        if(tok.value.symbol.i == f->special_form_plus.i) {
+            opcode.value.special_form = special_form_plus;
+        } else if(tok.value.symbol.i == f->special_form_minus.i) {
+            opcode.value.special_form = special_form_minus;
+        } else if(tok.value.symbol.i == f->special_form_times.i) {
+            opcode.value.special_form = special_form_times;
+        } else if(tok.value.symbol.i == f->special_form_divide.i) {
+            opcode.value.special_form = special_form_divide;
+        } else if(tok.value.symbol.i == f->special_form_emit.i) {
+            opcode.value.special_form = special_form_emit;
+        } else if(tok.value.symbol.i == f->special_form_period.i) {
+            opcode.value.special_form = special_form_period;
+        } else {
+            /*symbol must be a word function*/
+            assert(0 && "TODO");
+        }
 
-        #undef if_special_form
-
+        OpcodeVec_push(&f->opcodes, opcode);
     } else {
         assert(0 && "Unreachable code");
     }
+}
+
+int forth_run_opcode(Forth * f) {
+    const Opcode opcode = f->opcodes.items[f->instruction_ptr]; 
+    f->instruction_ptr += 1;
+
+    if(opcode.tag == TAG_EOF) {
+        return 1;
+    }
+    if(opcode.tag == TAG_PUSH_TOKEN) {
+        TokenVec_push(&f->stack, opcode.value.push_token);   
+    } else if(opcode.tag == TAG_SPECIAL_FORM) {
+        opcode.value.special_form(f);  
+    } else if(opcode.tag == TAG_FN_CALL) {
+        IntVec_push(&f->return_stack, f->instruction_ptr);
+        f->instruction_ptr = opcode.value.fn_call;
+    } else {
+        assert(0 && "invalid opcode tag");
+    }
+
+    return 0;
 }
 
 void forth_eval(Forth * f, const char * const input, unsigned long len) {
@@ -286,23 +351,23 @@ void forth_eval(Forth * f, const char * const input, unsigned long len) {
     /*parse tokens into opcodes*/
     {
         int current_token = 0;
-        forth_top_level(f, &tokens, &current_token);
-    }
-    /*
-    for(i = 0; i < tokens.len; ++i) {
-        const Token token = tokens.items[i];
-        if(token.tag == TAG_INTEGER) {
-
+        Opcode eof = {0};
+        eof.tag = TAG_EOF;
+        f->instruction_ptr = f->opcodes.len;
+        while((unsigned int)current_token < tokens.len) {
+            forth_top_level(f, &tokens, &current_token);
         }
-    }*/
+        OpcodeVec_push(&f->opcodes, eof);
+    }
 
+    while(forth_run_opcode(f) == 0) {}
 }
 
 
 
 int main() {
     Forth f = {0};
-    char * input = "1 2 3 4 5";
+    char * input = "1 2 3 4 5 + . * . 45 emit";
     forth_eval(&f, input, strlen(input));
 }
 
