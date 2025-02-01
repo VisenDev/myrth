@@ -1,120 +1,3 @@
-
-
-#if 0
-/*Tokenizer Implementation*/
-typedef struct Tokenizer {
-    intvec out;
-
-    char ** strs;
-    int strs_len;
-    int strs_cap;
-
-    char ** tokens;
-    int len;
-    int cap;
-} Tokenizer;
-
-
-int tokenizer_id(Tokenizer * t, char * tok) {
-    int i = 0;
-    if(tok == NULL) {
-        return -1;
-    }
-    for(i = 0; i < t->len; ++i) {
-        if(strcmp(t->tokens[i], tok) == 0) {
-            return i;
-        }
-    }
-    if(t->cap == 0) {
-        t->cap = 128;
-        t->len = 0;
-        t->tokens = malloc(t->cap * sizeof(char *));
-    } else if(t->len >= t->cap) {
-        t->cap = (t->cap + 1) * 2;
-        t->tokens = realloc(t->tokens, t->cap * sizeof(char*));
-        assert(t->tokens);
-    }
-
-    t->tokens[t->len] = tok;
-    t->len += 1;
-    return t->len - 1;
-}
-
-void tokenize(Tokenizer * self, const char * const str) {
-/*    printf("Tokenizing:%s", str);*/
-    if(self->strs_cap <= 0) {
-        const int initial_cap = 16;
-        self->strs = malloc(sizeof(char *) * initial_cap);
-        assert(self->strs);
-        self->strs_cap = initial_cap;
-        self->strs_len = 0;
-    }
-
-    if(self->strs_len >= self->strs_cap) {
-        self->strs = realloc(self->strs, sizeof(char *) * self->strs_cap * 2);
-        assert(self->strs);
-        self->strs_cap *= 2;
-    }
-
-
-    self->strs[self->strs_len] = strdup(str);
-    self->strs_len += 1;
-    {
-        intvec tmp = {0};
-        char * tok = strtok(self->strs[self->strs_len - 1], " \n");
-        intvec_push(&tmp, -1);
-
-        while(tok != NULL) {
-            const int id = tokenizer_id(self, tok);
-            /*printf("%s:%d\n", tok, id);*/
-            intvec_push(&tmp, id);
-            tok = strtok(NULL, " \n");
-        }
-
-        {
-            int tok = intvec_pop(&tmp);
-            while(tok != -1) {
-                intvec_push(&self->out, tok);
-                tok = intvec_pop(&tmp);
-            }
-        }
-        free(tmp.items);
-    }
-}
-
-
-
-
-int is_number(const char * tok) {
-    const char * str = tok;
-    while(*tok != 0) {
-        if(*tok < '0' || *tok > '9') {
-            return 0;
-        }
-        ++tok;
-    }
-    return 1;
-}
-
-void tokenize_file(Tokenizer * self, char * filename) {
-    FILE * f = fopen(filename, "r");
-    char * buffer;
-    int length;
-    {
-        fseek (f, 0, SEEK_END);
-        length = ftell (f);
-        fseek (f, 0, SEEK_SET);
-        buffer = malloc (length);
-        if (buffer) {
-            fread (buffer, 1, length, f);
-        }
-        fclose (f);
-    }
-    return tokenize(self, buffer);
-}
-#endif
-
-
 #include <string.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -154,15 +37,19 @@ T T##Vec_pop(T##Vec* self) { \
     } \
     self->len -= 1; \
     return self->items[self->len]; \
-} \
+}
+
+
+#define streql(a, b) (strncmp(a, b, 256) == 0)
 
 
 struct Forth;
 typedef void (*SpecialFormFn) (struct Forth *);
 
 typedef struct {
-    int lookup_index;
+    int i;
 } StringId;
+#define NULL_STRING_ID 0
 
 typedef struct {
     char * str;
@@ -190,7 +77,7 @@ typedef struct {
     } tag;
     union {
         Token push_token;
-        SpecialFormFn fn;
+        SpecialFormFn special_form;
         int fn_call;
     } value;
 } Opcode;
@@ -200,6 +87,7 @@ ImplementVec(Int)
 ImplementVec(Token)
 ImplementVec(Opcode)
 ImplementVec(String)
+ImplementVec(SpecialFormFn)
 
 typedef struct Forth {
     StringVec memory_buffers;
@@ -207,7 +95,17 @@ typedef struct Forth {
     TokenVec stack;
     int instruction_ptr;
     IntVec return_stack;
-    OpcodeVec instructions;
+    OpcodeVec opcodes;
+
+    /*special_forms names*/
+    StringId special_form_plus;
+    StringId special_form_minus;
+    StringId special_form_times;
+    StringId special_form_divide;
+    StringId special_form_dup;
+    StringId special_form_emit;
+    StringId special_form_compile;
+    StringId special_form_stop_compile;
 } Forth;
 
 
@@ -237,10 +135,17 @@ int is_real(char * tok) {
 
 StringId forth_string_id(Forth * f, char * str) {
     StringId result = {0};
-    int i = 0;
-    for(i = 0; i < f->strings.len; ++i) {
+    unsigned int i = 1;
+
+    /*ensure null string is taken*/
+    if(f->strings.len == 0) {
+        String string = {0};
+        StringVec_push(&f->strings, string);
+    }
+
+    for(i = 1; i < f->strings.len; ++i) {
         if(strcmp(f->strings.items[i].str, str) == 0) {
-            result.lookup_index = i;
+            result.i = i;
             return result;
         }
     }
@@ -248,18 +153,109 @@ StringId forth_string_id(Forth * f, char * str) {
         String string = {0};
         string.str = str;
         StringVec_push(&f->strings, string);
-        result.lookup_index = f->strings.len - 1;
+        result.i = f->strings.len - 1;
         return result;
     }
 }
 
+void forth_report_error(Forth * f, char * msg) {
+    (void) f;
+    printf("Error: %s\n", msg);
+    abort();
+}
+
+#define special_form_math_fn(name, operator) \
+    void name(Forth * f) { \
+        Token top = TokenVec_pop(&f->stack); \
+        Token second = TokenVec_pop(&f->stack); \
+        Token result = {0}; \
+        if(top.tag == TAG_SYMBOL) { \
+            forth_report_error(f, "Expected real or integer at stack top");  \
+        } \
+        if(second.tag == TAG_SYMBOL) { \
+            forth_report_error(f, "Expected real or integer at stack second to top"); \
+        } \
+        if(top.tag != second.tag) { \
+            forth_report_error(f, "Expected top and second to top types to match"); \
+        } \
+        if(top.tag == TAG_REAL) { \
+            result.tag = TAG_REAL; \
+            result.value.real = top.value.real operator second.value.real; \
+            TokenVec_push(&f->stack, result); \
+        } else if(top.tag == TAG_INTEGER) { \
+            result.tag = TAG_INTEGER; \
+            result.value.integer = top.value.integer operator second.value.integer; \
+            TokenVec_push(&f->stack, result); \
+        } else { \
+            forth_report_error(f, "Invalid tag for stack item"); \
+        } \
+    }
+
+special_form_math_fn(special_form_plus, +)
+special_form_math_fn(special_form_minus, -)
+special_form_math_fn(special_form_times, *)
+special_form_math_fn(special_form_divide, /)
+
+#undef special_form_math_fn
+
+void special_form_dup(Forth * f) {
+    Token top = TokenVec_pop(&f->stack);
+    TokenVec_push(&f->stack, top);
+    TokenVec_push(&f->stack, top);
+}
+
+
+/*ensure the special form names are set*/
+void forth_ensure_valid_special_forms(Forth * f) {
+    #define special_form_id_set(fieldname, stringname) \
+        if(f->fieldname.i == NULL_STRING_ID) { \
+            f->fieldname = forth_string_id(f, stringname); \
+        }
+
+    special_form_id_set(special_form_dup, "dup");
+    special_form_id_set(special_form_plus, "+");
+    special_form_id_set(special_form_minus, "-");
+    special_form_id_set(special_form_divide, "/");
+    special_form_id_set(special_form_times, "*");
+    special_form_id_set(special_form_emit, "emit");
+
+    #undef special_form_id_set
+}
+
 void forth_top_level(Forth * f, TokenVec * toks, int * i) {
+    Token tok = toks->items[*i];
+    Opcode opcode = {0};
+
+    forth_ensure_valid_special_forms(f);
+
+    if(tok.tag == TAG_INTEGER || tok.tag == TAG_REAL) {
+        opcode.tag = TAG_PUSH_TOKEN;
+        opcode.value.push_token = tok;
+        OpcodeVec_push(&f->opcodes, opcode);
+    } else if (tok.tag == TAG_SYMBOL) {
+        #define if_special_form(fieldname) \
+            if(tok.value.symbol.i == f->fieldname.i) { \
+                opcode.tag = TAG_SPECIAL_FORM; \
+                opcode.value.special_form = fieldname; \
+                OpcodeVec_push(&f->opcodes, opcode); \
+            }
+
+        if_special_form(special_form_dup)
+        else if_special_form(special_form_plus)
+        else if_special_form(special_form_minus)
+        else if_special_form(special_form_times)
+        else if_special_form(special_form_divide)
+
+        #undef if_special_form
+
+    } else {
+        assert(0 && "Unreachable code");
+    }
 }
 
 void forth_eval(Forth * f, const char * const input, unsigned long len) {
     char * buf = strndup(input, len + 1);
     TokenVec tokens = {0};
-    int i = 0;
     char * tok = strtok(buf, " \n");
     {
         String str = {0};
@@ -300,6 +296,14 @@ void forth_eval(Forth * f, const char * const input, unsigned long len) {
         }
     }*/
 
+}
+
+
+
+int main() {
+    Forth f = {0};
+    char * input = "1 2 3 4 5";
+    forth_eval(&f, input, strlen(input));
 }
 
 #if 0
